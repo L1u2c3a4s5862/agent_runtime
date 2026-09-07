@@ -1,6 +1,10 @@
+.cursor/
+.idea/
+.vscode/
 __pycache__/
 .venv/
 .pytest_cache/
+.omc/
 .env
 logs/
 sessions/
