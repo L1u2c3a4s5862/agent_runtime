@@ -1,3 +1,5 @@
+"""Agent 主循环的端到端测试：全部用 ScriptedLLM 脚本驱动，零 API 依赖。"""
+
 from pytest import raises
 
 from runtime.agent import Agent
@@ -11,6 +13,7 @@ def join(contents: list[str]) -> str:
     """把消息内容拼成一段文本，便于子串断言。"""
     return ' '.join(contents)
 
+# 测试内嵌的离线假数据：Agent 循环测试关注的是编排逻辑，不是真实工具
 _FAKE_PAGES = {
     '北京': '北京是中华人民共和国的首都，位于华北平原北部。',
     'Python': 'Python 是一种解释型、面向对象的高级编程语言。'
@@ -46,6 +49,7 @@ def make_fake_registry() -> ToolRegistry:
         },
         func=_fake_search
     ))
+    # weather 的 date 保持必填：test_invalid_args_self_corrects 依赖"缺参数"错误反馈
     registry.register(Tool(
         name='weather',
         description='查询指定城市在指定日期的天气',
@@ -63,6 +67,7 @@ def make_fake_registry() -> ToolRegistry:
 
 def make_agent(responses: list[str], **kwargs) -> Agent:
     """用脚本构造 Agent，默认挂假数据工具（零 API 依赖）。"""
+    # setdefault：需要自定义注册表的测试（如 bomb）可显式传 tools 覆盖
     kwargs.setdefault('tools', make_fake_registry())
     return Agent(ScriptedLLM(responses), **kwargs)
 
@@ -81,7 +86,10 @@ def make_bomb_registry() -> ToolRegistry:
     return registry
 
 class TestBasicLoop:
+    """单回合基本流程：工具调用、直接答复、原始文本入历史。"""
+
     def test_single_tool_round(self):
+        # 第一条脚本输出调工具，第二条给最终答案
         agent = make_agent([
             'Thought: 算一下\nAction: calculator\nAction Input: {"expression": "1+2"}',
             'Thought: 有答案了\nFinal Answer: 结果是 3'
@@ -99,6 +107,7 @@ class TestBasicLoop:
         assert [m.role for m in session.history.messages] == ['user', 'assistant', 'user', 'assistant']
 
     def test_final_direct_without_tool(self):
+        # 模型一轮直接给出答案：跳过工具步骤
         agent = make_agent(['Final Answer: 你好！'])
         session = Session()
         assert agent.run(session, '你好') == '你好！'
@@ -113,6 +122,8 @@ class TestBasicLoop:
         assert history[1].content == react  # assistant 原始 ReAct 文本无损入历史
 
 class TestFollowUps:
+    """多轮回合：追问依赖历史与观察。"""
+
     def test_pure_conversation_followup(self):
         agent = make_agent([
             'Final Answer: 北京今天晴，19~27℃。',
@@ -121,6 +132,7 @@ class TestFollowUps:
         session = Session()
         agent.run(session, '北京今天天气怎么样？')
         agent.run(session, '然后呢？')
+        # 第二问的请求带上了第一问的问答历史
         second_call = agent.llm.calls[1]
         text = join(m.content for m in second_call)
         assert '北京今天天气怎么样' in text
@@ -145,12 +157,15 @@ class TestFollowUps:
         assert '2026-09-06' in text
 
 class TestSessionIsolation:
+    """多 Session 并存时历史互不串扰。"""
+
     def test_two_sessions_do_not_leak(self):
         llm = ScriptedLLM([
             'Final Answer: A 的答案 1',
             'Final Answer: B 的答案 1',
             'Final Answer: A 的答案 2'
         ])
+        # 注意：这里不带 tools，纯对话不触发工具，无需假数据注册表
         agent = Agent(llm)
         sm = SessionManager()
         session_a = sm.create(label='A')
@@ -185,6 +200,8 @@ class TestSessionIsolation:
         assert '算 2*3' not in text
 
 class TestContextCompression:
+    """端到端验证滑动窗口裁剪。"""
+
     def test_oldest_turn_dropped_end_to_end(self):
         agent = make_agent([f'Final Answer: 答案{i}' for i in range(4)])
         session = Session(max_turns=2)
@@ -206,6 +223,8 @@ class TestContextCompression:
         assert len(session.history.messages) == 8
 
 class TestErrorHandling:
+    """异常路径：错误反馈喂回、熔断、回合原子性。"""
+
     def test_unknown_tool_self_corrects(self):
         agent = make_agent([
             'Thought: 试试\nAction: nosuch\nAction Input: {}',
@@ -220,6 +239,7 @@ class TestErrorHandling:
         assert '未知工具' in text
 
     def test_invalid_args_self_corrects(self):
+        # 第一次调用缺 date 参数，被校验拒绝后模型补参数重试
         agent = make_agent([
             'Thought: 查\nAction: weather\nAction Input: {"city": "北京"}',
             'Thought: 补参数\nAction: weather\nAction Input: {"city": "北京", "date": "2026-09-06"}',
@@ -240,10 +260,12 @@ class TestErrorHandling:
         session = Session()
         answer = agent.run(session, '引爆一下')
         assert answer == '已处理异常，抱歉。'
+        # 工具异常转成 Error 观察喂回，模型给出兜底答复
         text = join(m.content for m in llm.calls[1])
         assert '执行异常' in text
 
     def test_parse_failures_exhausted_raises(self):
+        # 3 条全部无法解析：默认 parse_retries=2，连续失败超限抛 ParseError
         agent = make_agent(['胡言乱语没有格式'] * 3)
         session = Session()
         with raises(ParseError, match='无法解析'):
@@ -251,6 +273,7 @@ class TestErrorHandling:
         assert session.history.messages == []  # 回合原子性：历史未污染
 
     def test_max_iterations_exceeded(self):
+        # max_steps=3 但脚本给 8 轮工具调用：步数耗尽抛熔断异常
         agent = make_agent(
             ['Thought: 再来\nAction: calculator\nAction Input: {"expression": "1+1"}'] * 8, max_steps=3
         )
@@ -260,6 +283,7 @@ class TestErrorHandling:
         assert session.history.messages == []
 
     def test_llm_exhausted_raises(self):
+        # 空脚本：第一次 LLM 调用就耗尽
         agent = make_agent([])
         session = Session()
         with raises(LLMError, match='耗尽'):
@@ -267,6 +291,7 @@ class TestErrorHandling:
         assert session.history.messages == []
 
     def test_parse_error_feedback_guides_retry(self):
+        # 第一次输出乱码，重试请求带协议反馈后模型改正
         agent = make_agent([
             '乱七八糟',
             'Final Answer: 这次对了'
@@ -279,6 +304,8 @@ class TestErrorHandling:
         assert '协议' in text
 
 class TestTrace:
+    """轨迹事件：成功与失败的记录。"""
+
     def test_happy_path_trace_events(self):
         agent = make_agent([
             'Thought: 算\nAction: calculator\nAction Input: {"expression": "2*21"}',
@@ -286,6 +313,7 @@ class TestTrace:
         ])
         session = Session()
         agent.run(session, '2*21 是多少')
+        # 轨迹顺序：llm → tool → llm（两次模型调用夹一次工具调用）
         kinds = [event.kind for event in session.traces]
         assert kinds == ['llm', 'tool', 'llm']
         tool_event = session.traces[1]

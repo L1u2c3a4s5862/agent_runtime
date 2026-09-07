@@ -1,3 +1,5 @@
+"""QWeather weather 工具测试：MockTransport 离线注入，零 API 依赖。"""
+
 from typing import Any
 
 from httpx import Client, MockTransport, Request, Response
@@ -6,15 +8,18 @@ from pytest import MonkeyPatch, raises
 from runtime._tools.weather import make_weather_tool
 from runtime.errors import ToolError
 
+# geo 接口响应：城市名 → location id
 _GEO_RESPONSE = {'code': '200', 'location': [
     {'name': '朝阳', 'id': '101010300', 'adm2': '北京', 'adm1': '北京市'}
 ]}
 
+# 实时天气接口响应
 _NOW_RESPONSE = {'code': '200', 'now': {
     'obsTime': '2026-09-05T15:00+08:00', 'text': '多云', 'temp': '19',
     'feelsLike': '17', 'windDir': '东北风', 'windScale': '2', 'humidity': '45'
 }}
 
+# 3 天预报接口响应
 _FORECAST_RESPONSE = {'code': '200', 'daily': [{
     'fxDate': '2026-09-05', 'textDay': '多云', 'textNight': '晴',
     'tempMax': '28', 'tempMin': '17', 'windDirDay': '东北风', 'windScaleDay': '2'
@@ -25,10 +30,12 @@ _FORECAST_RESPONSE = {'code': '200', 'daily': [{
 
 def make_client(path_responses: dict[str, dict], monkeypatch: MonkeyPatch) -> tuple[Any, dict[str, dict]]:
     """构造离线 QWeather 工具，返回 (tool, 请求参数记录)。"""
+    # 覆盖环境变量：测试只认 test-key，与 .env 内容无关
     monkeypatch.setenv('QWEATHER_API_KEY', 'test-key')
     captured: dict[str, dict] = {}
 
     def handler(request: Request) -> Response:
+        # 按 URL path 分发预设响应，同时记录请求参数供断言
         captured[request.url.path] = dict(request.url.params)
         return Response(200, json=path_responses[request.url.path])
 
@@ -60,6 +67,7 @@ class TestMakeWeatherTool:
         # geo 用城市名，天气接口用解析出的 location id
         assert captured['/v2/city/lookup']['location'] == '北京'
         assert captured['/v7/weather/now']['location'] == '101010300'
+        # 每个请求都带上了 key
         assert all(params['key'] == 'test-key' for params in captured.values())
 
     def test_forecast_by_date(self, monkeypatch: MonkeyPatch):
@@ -70,6 +78,7 @@ class TestMakeWeatherTool:
         assert '2026-09-06' in output and '小雨' in output and '18~25℃' in output
 
     def test_date_out_of_range_raises(self, monkeypatch: MonkeyPatch):
+        # 预报只有 2 天数据，查第 5 天应报超出范围
         tool, _ = make_client(
             {'/v2/city/lookup': _GEO_RESPONSE, '/v7/weather/3d': _FORECAST_RESPONSE}, monkeypatch
         )
@@ -77,17 +86,20 @@ class TestMakeWeatherTool:
             tool.func('北京', '2026-09-10')
 
     def test_city_not_found_raises(self, monkeypatch: MonkeyPatch):
+        # geo 返回空 location 列表：城市不存在
         tool, _ = make_client({'/v2/city/lookup': {'code': '200', 'location': []}}, monkeypatch)
         with raises(ToolError, match='未找到城市'):
             tool.func('不存在市')
 
     def test_missing_key_raises(self, monkeypatch: MonkeyPatch):
+        # 摘掉环境变量：调用时才报明确错误
         monkeypatch.delenv('QWEATHER_API_KEY', raising=False)
         tool = make_weather_tool()
         with raises(ToolError, match='QWEATHER_API_KEY'):
             tool.func('北京')
 
     def test_api_error_code_raises(self, monkeypatch: MonkeyPatch):
+        # QWeather 业务错误：HTTP 200 + code=401（key 无效）
         tool, _ = make_client(
             {'/v2/city/lookup': _GEO_RESPONSE, '/v7/weather/now': {'code': '401'}}, monkeypatch
         )

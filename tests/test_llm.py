@@ -1,3 +1,5 @@
+"""LLM 客户端测试：OpenAIClient（MockTransport 离线注入）与 ScriptedLLM。"""
+
 import os
 from json import loads
 from types import SimpleNamespace
@@ -16,18 +18,21 @@ from runtime.errors import LLMError
 from runtime.llm import OpenAIClient
 from runtime.testing import ScriptedLLM
 
+# 与产品代码一致：.env 可能兜底配置，测试读同一套环境
 load_dotenv()
 
 test_model = os.getenv('LLM_MODEL', 'test-model')
 test_api_key = os.getenv('LLM_API_KEY', 'sk-test')
 
 def make_client(handler: Callable[[Request], Response]) -> OpenAIClient:
-    """用 MockTransport 构造离线 OpenAIClient。"""
+    """用 MockTransport 构造离线 OpenAIClient，不发真实请求。"""
     transport = MockTransport(handler)
+    # http_client 注入：openai SDK 底层就是 httpx，测试可直接接管传输层
     return OpenAIClient(http_client=Client(transport=transport))
 
 def ok_response(content: str='x') -> dict[str, Any]:
     """构造 openai SDK 能解析的完整 chat.completion 响应体。"""
+    # SDK 用 pydantic 校验，id/object/created/finish_reason 等字段缺一不可
     return {
         'id': 'chatcmpl-test',
         'object': 'chat.completion',
@@ -49,6 +54,7 @@ class TestOpenAIClient:
         assert client.complete([Message('user', 'hi')]) == '你好'
 
     def test_request_body_shape(self):
+        # 断言发出去的请求体：model/messages 透传，Authorization 带 Bearer key
         captured = {}
 
         def handler(request: Request) -> Response:
@@ -68,6 +74,7 @@ class TestOpenAIClient:
         assert captured['auth'] == f'Bearer {test_api_key}'
 
     def test_empty_content_raises(self):
+        # API 正常返回但 content 为空：视为空输出错误
         def handler(request: Request) -> Response:
             return Response(200, json=ok_response(''))
 
@@ -82,6 +89,7 @@ class TestOpenAIClient:
         assert OpenAIClient._extract_content(response) == '思考后的结论'
 
     def test_extract_content_prefers_content_over_reasoning(self):
+        # content 有内容时优先取 content，忽略 reasoning
         message = SimpleNamespace(content='正文', reasoning_content='思考过程')
         response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
         assert OpenAIClient._extract_content(response) == '正文'
@@ -96,6 +104,7 @@ class TestOpenAIClient:
             client.complete([Message('user', 'hi')])
 
     def test_http_500_raises_with_status(self):
+        # 服务端 5xx：错误信息带 HTTP 状态码
         def handler(request: Request) -> Response:
             return Response(500, text='internal error')
 
@@ -104,6 +113,7 @@ class TestOpenAIClient:
             client.complete([Message('user', 'hi')])
 
     def test_connect_error_raises(self):
+        # 网络层连接失败：归为"调用失败"
         def handler(request: Request) -> Response:
             raise ConnectError('连接被拒绝', request=request)
 
@@ -112,6 +122,7 @@ class TestOpenAIClient:
             client.complete([Message('user', 'hi')])
 
     def test_invalid_json_response_raises(self):
+        # 非 JSON 响应：SDK 透传原始文本，客户端识别并报错
         def handler(request: Request) -> Response:
             return Response(200, text='not-json')
 
@@ -130,6 +141,7 @@ class TestOpenAIClient:
 
 class TestScriptedLLM:
     def test_responses_in_order(self):
+        # 预设回复按顺序弹出
         llm = ScriptedLLM(['第一次', '第二次'])
         assert llm.complete([Message('user', 'q1')]) == '第一次'
         assert llm.complete([Message('user', 'q2')]) == '第二次'
@@ -141,6 +153,7 @@ class TestScriptedLLM:
             llm.complete([Message('user', 'q2')])
 
     def test_calls_snapshot(self):
+        # calls 记录每次调用的消息列表
         llm = ScriptedLLM(['a', 'b'])
         llm.complete([Message('user', 'q1')])
         llm.complete([Message('user', 'q2')])
@@ -153,6 +166,7 @@ class TestScriptedLLM:
         assert llm.calls[0][0].content == 'q1'
 
     def test_append_adds_response(self):
+        # 空构造后动态追加回复
         llm = ScriptedLLM()
         llm.append('新输出')
         assert llm.complete([Message('user', 'x')]) == '新输出'

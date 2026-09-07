@@ -1,3 +1,5 @@
+"""轨迹记录测试：事件字段、失败标记与渲染冒烟。"""
+
 from datetime import datetime
 
 from runtime.session import Session
@@ -15,7 +17,9 @@ def test_record_llm_event_fields():
     assert event.payload == '模型输出文本'
     assert event.ok is True
     assert event.error == ''
+    # 传入 started_at 时自动计算耗时（非负）
     assert event.duration_ms is not None and event.duration_ms >= 0
+    # 事件自动挂载到 session
     assert session.traces == [event]
 
 def test_record_tool_event():
@@ -29,6 +33,7 @@ def test_record_tool_event():
     assert event.duration_ms is None  # 未传 started_at 则不计算耗时
 
 def test_record_failed_event():
+    # 失败事件：ok=False 且带错误原因
     session = Session()
     event = record_event(
         session, 'tool', 'search',
@@ -38,6 +43,7 @@ def test_record_failed_event():
     assert event.error == '索引爆炸'
 
 def test_render_trace_does_not_raise():
+    # 渲染冒烟：成功/失败混合的事件列表能渲染即可，不抛异常
     events = [
         TraceEvent(
             kind='llm', name='m', payload='输出',
