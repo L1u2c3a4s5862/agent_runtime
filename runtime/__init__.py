@@ -1,3 +1,5 @@
+"""agent-runtime 运行时包的公共入口，统一导出对外可用的核心组件。"""
+
 from .agent import Agent, build_system_prompt
 from .context import ContextManager, Message
 from .errors import (
@@ -39,8 +41,8 @@ __all__ = [
     'ToolRegistry',
     'ToolTurn',
     'ToolValidationError',
-    'make_default_registry',
     'TraceEvent',
+    'make_default_registry',
     'build_system_prompt',
     'parse_turn',
     'render_trace',

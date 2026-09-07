@@ -1,3 +1,5 @@
+"""轨迹记录：每次 LLM / 工具调用挂载一个 TraceEvent 到 session，可 rich 渲染。"""
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal, Optional
@@ -5,6 +7,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 from rich.console import Console
 from rich.table import Table
 
+# 仅类型标注用，避免运行时循环导入
 if TYPE_CHECKING:
     from .session import Session
 
@@ -51,6 +54,7 @@ def record_event(
         kind=kind, name=name, payload=payload,
         started_at=begin, ok=ok, error=error
     )
+    # finished_at 由 default_factory 生成，与 begin 相减即真实耗时
     if started_at is not None:
         event.duration_ms = (event.finished_at - begin).total_seconds() * 1000
     session.traces.append(event)
@@ -68,6 +72,7 @@ def render_trace(events: list[TraceEvent]) -> None:
     for index, event in enumerate(events, start=1):
         status = 'OK' if event.ok else f'ERROR: {event.error}'
         duration = f'{event.duration_ms:.1f}' if event.duration_ms is not None else '-'
+        # 摘要截 60 字并把换行压成空格，保证表格单行可读
         summary = event.payload[:60].replace('\n', ' ') + ('…' if len(event.payload) > 60 else '')
         table.add_row(str(index), event.kind, event.name, duration, status, summary)
     Console().print(table)

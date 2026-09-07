@@ -1,3 +1,5 @@
+"""LLM 客户端：抽象接口 + 基于 openai SDK 的 OpenAI 兼容实现。"""
+
 import json
 import os
 from abc import ABC, abstractmethod
@@ -17,6 +19,7 @@ from openai.types.chat import ChatCompletion
 from .context import Message
 from .errors import LLMError
 
+# 模块导入时把 .env 加载进环境变量：所有配置项（base_url/key/model）都有兜底来源
 load_dotenv()
 
 class LLMClient(ABC):
@@ -38,9 +41,11 @@ class OpenAIClient(LLMClient):
         temperature: float=0.0,
         http_client: Optional[Client]=None
     ):
+        # 参数优先，缺省时读环境变量（.env 已由 load_dotenv 加载）
         self.base_url = base_url or os.getenv('LLM_BASE_URL', '')
         self.api_key = api_key or os.getenv('LLM_API_KEY', '')
         self.model = model or os.getenv('LLM_MODEL', '')
+        # 缺端点/模型直接拒绝构造：比请求时再失败更好排查
         if not self.base_url:
             raise ValueError('base_url 未配置（可通过参数或 LLM_BASE_URL 环境变量提供）')
         if not self.model:
@@ -71,7 +76,7 @@ class OpenAIClient(LLMClient):
         """通过 openai SDK 发送 chat/completions 请求。"""
         started = datetime.now()
         logger.debug(
-            f'LLM 请求: model={self.model!r} messages={len(messages)} '
+            f'LLM 请求: model={self.model} messages={len(messages)} '
             f'temperature={self.temperature} max_tokens=512'
         )
         try:
@@ -96,15 +101,17 @@ class OpenAIClient(LLMClient):
     @staticmethod
     def _describe_api_error(error: APIError) -> str:
         """把非状态码、非网络类的 APIError 翻译成可读消息。"""
+        # JSONDecodeError 说明服务端返回了坏响应体，与一般 API 错误分开表述
         if isinstance(error.__cause__, json.JSONDecodeError):
             return f'LLM API 响应不是合法 JSON: {error.__cause__}'
         return f'LLM API 错误: {error}'
 
     @staticmethod
     def _extract_content(response: ChatCompletion) -> str:
-        """从响应体提取 `choices[0].message.content`；推理模型 content 为空时兜底取 `reasoning_content`。"""
+        """从响应体提取 choices[0].message.content；推理模型 content 为空时兜底取 reasoning_content。"""
         if not response.choices:
             return ''
         message = response.choices[0].message
+        # 推理模型（如 DeepSeek 思考模式）可能把正文放 reasoning_content，content 留空
         content = message.content or getattr(message, 'reasoning_content', '') or ''
         return content if isinstance(content, str) else ''

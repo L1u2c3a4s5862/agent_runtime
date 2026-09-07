@@ -1,3 +1,5 @@
+"""weather 工具：基于 QWeather（和风天气）的实时天气与 3 天预报。"""
+
 import os
 from datetime import datetime
 from typing import Optional
@@ -12,11 +14,13 @@ from ..tools import Tool
 
 load_dotenv()
 
+# geo API 独立域名且各订阅通用，写死；数据 API 域名按订阅切换
 _GEO_HOST = 'geoapi.qweather.com'
 
 def make_weather_tool(http_client: Optional[Client]=None) -> Tool:
     """构造基于 QWeather 的 weather 工具。"""
     key = os.getenv('QWEATHER_API_KEY', '')
+    # 免费订阅用 api.qweather.com，dev 订阅可通过 QWEATHER_API_HOST 切到 devapi.qweather.com
     host = os.getenv('QWEATHER_API_HOST', 'api.qweather.com')
     http = http_client or Client(timeout=10.0)
     return Tool(
@@ -38,6 +42,7 @@ def _weather(city: str, date: str, key: str, host: str, http: Client) -> str:
     if not key:
         raise ToolError('未配置 QWEATHER_API_KEY（可在 https://dev.qweather.com 免费申请）')
     logger.debug(f'QWeather 查询: city={city!r} date={date or "实时"!r}')
+    # QWeather 数据接口用 location id 而非城市名，先做一次 geo 解析
     location = _resolve_location(city, key, http)
     logger.debug(f'QWeather 城市解析: {city!r} -> id={location["id"]} {_full_name(location)!r}')
     if not date:
@@ -56,6 +61,7 @@ def _get_qweather(path: str, params: dict[str, str], key: str, host: str, http: 
         f'QWeather 请求: {path!r} code={data.get("code")} '
         f'耗时={(datetime.now() - started).total_seconds():.2f}s'
     )
+    # QWeather 业务错误走 HTTP 200 + code 非 200（如 401 key 无效）
     if data.get('code') != '200':
         raise ToolError(f'QWeather API 错误 code={data.get("code")}（key 无效或订阅额度不足）')
     return data
@@ -66,12 +72,14 @@ def _resolve_location(city: str, key: str, http: Client) -> dict:
     locations = data.get('location') or []
     if not locations:
         raise ToolError(f'未找到城市「{city!r}」')
+    # 取第一个匹配：同名城市多时按相关度排序，首个即最可能
     return locations[0]
 
 def _full_name(location: dict) -> str:
     """省/市拼接全名，相邻重复段去重，如 北京市·朝阳。"""
     parts: list[str] = []
     for part in (location.get('adm1', ''), location.get('adm2', ''), location.get('name', '')):
+        # geo 对「北京」返回的 adm2 与 name 相同，相邻去重避免「北京市·北京·北京」
         if part and (not parts or part != parts[-1]):
             parts.append(part)
     return '·'.join(parts)
@@ -94,5 +102,6 @@ def _format_forecast(data: dict, location: dict, date: str) -> str:
                 f'{_full_name(location)} {date}：白天 {day["textDay"]}，夜间 {day["textNight"]}，'
                 f'{day["tempMin"]}~{day["tempMax"]}℃，{day["windDirDay"]} {day["windScaleDay"]} 级'
             )
+    # 日期不在预报范围内：把可选日期一并告知模型，便于它改查其他日期
     days = '、'.join(day['fxDate'] for day in daily)
     raise ToolError(f'仅支持 {days} 的预报（免费订阅 3 天），{date} 超出范围')

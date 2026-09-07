@@ -1,3 +1,5 @@
+"""测试替身：脚本化 Fake LLM，按预设顺序返回回复，供离线测试与演示。"""
+
 from copy import deepcopy
 from typing import Optional
 
@@ -14,6 +16,7 @@ class ScriptedLLM(LLMClient):
 
     def complete(self, messages: list[Message]) -> str:
         """弹出下一条预设回复；耗尽抛 LLMError。"""
+        # 记录时深拷贝：外部后续改 messages 不影响已存快照
         self._calls.append(deepcopy(messages))
         if not self._responses:
             raise LLMError('脚本回复已耗尽')

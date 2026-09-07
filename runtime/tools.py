@@ -1,3 +1,5 @@
+"""工具系统：Tool 数据模型、参数校验与注册表。"""
+
 import json
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -9,8 +11,10 @@ from .logging import setup_log_file
 
 setup_log_file('agent.log')
 
+# JSON Schema 的 type 到 Python 类型检查的映射，只支持常用标量与容器
 _TYPE_CHECKS: dict[str, Callable[[Any], bool]] = {
     'string': lambda value: isinstance(value, str),
+    # bool 是 int 的子类，必须先排除，否则 True 会被当成合法 integer
     'integer': lambda value: isinstance(value, int) and not isinstance(value, bool),
     'number': lambda value: isinstance(value, (int, float)) and not isinstance(value, bool),
     'boolean': lambda value: isinstance(value, bool),
@@ -35,6 +39,7 @@ def _check_typed(properties: dict[str, Any], args: dict[str, Any], errors: list[
     cleaned: dict[str, Any] = {}
     for key, value in args.items():
         spec = properties.get(key)
+        # 未知键静默丢弃：模型偶尔多传参数，直接忽略比报错更宽容
         if spec is None:
             continue
         spec_type = spec.get('type')
@@ -89,6 +94,7 @@ class ToolRegistry:
         """渲染工具清单，供拼入 system prompt。"""
         lines = []
         for tool in self.list():
+            # 每个参数只保留描述或类型，避免把整份 JSON Schema 塞进 prompt
             param_desc = {
                 key: spec.get('description') or spec.get('type', '任意')
                 for key, spec in tool.parameters.get('properties', {}).items()

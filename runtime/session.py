@@ -1,3 +1,5 @@
+"""会话模型：多 Session 隔离、切换与 JSON 持久化。"""
+
 from json import dumps, loads
 from pathlib import Path
 from uuid import uuid4
@@ -22,6 +24,7 @@ class Session:
     metadata: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
+        # 历史管理器依赖 max_turns/max_chars，必须在字段就绪后初始化
         self.history = ContextManager(self.max_turns, self.max_chars)
 
     def to_dict(self) -> dict[str, object]:
@@ -57,7 +60,9 @@ class Session:
 
 def save_session(session: Session, directory: Path) -> None:
     """把会话写入 directory/<id>.json。"""
+    # 目录由调用方指定（app 用 sessions/，测试用 tmp_path）
     directory.mkdir(exist_ok=True)
+    # indent 便于人工查看；ensure_ascii=False 保留中文原文
     payload = dumps(session.to_dict(), ensure_ascii=False, indent=2)
     (directory / f'{session.id}.json').write_text(payload, encoding='utf-8')
 
@@ -65,6 +70,7 @@ def load_session(session_id: str, directory: Path) -> Session:
     """从 directory/<id>.json 恢复会话；文件不存在抛 SessionNotFoundError。"""
     path = directory / f'{session_id}.json'
     if not path.is_file():
+        # 报错带路径提示：用户直接看 sessions/ 目录文件名就能找到正确 id
         raise SessionNotFoundError(f'会话不存在: {session_id}（{directory} 下无 {path.name}）')
     return Session.from_dict(loads(path.read_text(encoding='utf-8')))
 

@@ -1,3 +1,5 @@
+"""ReAct 文本协议解析器：把 LLM 输出切成段落并解析成 FinalTurn / ToolTurn。"""
+
 import re
 from json import JSONDecodeError, loads
 from dataclasses import dataclass
@@ -10,6 +12,7 @@ from .logging import setup_log_file
 
 setup_log_file('agent.log')
 
+# 协议标签：Thought / Action / Action Input / Final Answer
 _TAG_RE = re.compile(r'^\s*(Thought|Action|Action Input|Final Answer)\s*:')
 
 @dataclass(frozen=True)
@@ -24,6 +27,7 @@ class ToolTurn:
     action: str
     action_input: dict[str, object]
 
+# 一轮解析的两种可能结果
 Turn = Union[FinalTurn, ToolTurn]
 
 def _parse_sections(text: str) -> dict[str, str]:
@@ -37,11 +41,13 @@ def _parse_sections(text: str) -> dict[str, str]:
             sections[current].append(line)
             continue
         if match is None:
+            # 标签之外的行归入当前段（如 Thought 的续行）；无当前段则丢弃
             if current is not None:
                 sections[current].append(line)
             continue
         tag = match.group(1)
         sections.setdefault(tag, [])
+        # 标签后的同段文本（如 Thought: 我打算查一下）
         rest = line[match.end():].strip()
         if rest:
             sections[tag].append(rest)
@@ -51,6 +57,7 @@ def _parse_sections(text: str) -> dict[str, str]:
 def _parse_json(raw: str) -> dict[str, object]:
     """解析 Action Input 的 JSON 对象，剥离 code fence 作为唯一容错。"""
     stripped = raw.strip()
+    # 模型常把 JSON 包在 ```json ... ``` 里，这是唯一允许的容错；其余坏 JSON 一律报错
     fence = re.fullmatch(r'```(?:json)?\s*(.*?)\s*```', stripped, re.S)
     if fence is not None:
         stripped = fence.group(1).strip()
@@ -65,6 +72,7 @@ def _parse_json(raw: str) -> dict[str, object]:
 
 def _build_tool_turn(sections: dict[str, str]) -> ToolTurn:
     """由已切好的段构造 ToolTurn，Action Input 为空时参数视为 {}。"""
+    # Action 只取第一行并剥掉引号：模型偶尔写出 "search" 这类带引号的工具名
     action = sections['Action'].strip().splitlines()[0].strip('"\'')
     raw = sections['Action Input']
     args: dict[str, object] = {} if raw == '' else _parse_json(raw)
@@ -75,6 +83,7 @@ def parse_turn(text: str) -> Turn:
     sections = _parse_sections(text)
     if not sections:
         raise ParseError('输出中没有识别到任何协议标记（Thought/Action/Final Answer），请按协议格式重新输出')
+    # Final Answer 优先：模型偶尔同时输出 Action 和 Final Answer，以答复为准
     if 'Final Answer' in sections:
         if 'Action' in sections:
             logger.warning('输出同时包含 Action 与 Final Answer，按 Final Answer 处理')

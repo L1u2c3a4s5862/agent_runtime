@@ -1,3 +1,5 @@
+"""Message 模型与会话上下文管理（Memory）：回合切分、滑动窗口裁剪。"""
+
 from dataclasses import dataclass
 from typing import Literal
 
@@ -5,6 +7,7 @@ Role = Literal['system', 'user', 'assistant']
 
 OBSERVATION_PREFIX = 'Observation: '
 ERROR_PREFIX = 'Error: '
+# 硬截断时每条最老消息保留的头部字符数
 HARD_KEEP = 300
 
 @dataclass
@@ -33,6 +36,7 @@ class ContextManager:
     """
 
     def __init__(self, max_turns: int = 6, max_chars: int = 8000) -> None:
+        # 上限必须为正，否则任何历史都会被立刻裁空
         if max_turns <= 0:
             raise ValueError(f'max_turns 必须为正数: {max_turns}')
         if max_chars <= 0:
@@ -45,6 +49,7 @@ class ContextManager:
     @property
     def messages(self) -> list[Message]:
         """已提交历史。"""
+        # 返回副本：调用方改列表不会污染内部状态
         return list(self._messages)
 
     @property
@@ -61,15 +66,18 @@ class ContextManager:
         dropped_turns = 0
         truncated = 0
         dropped_chars = 0
+        # 第一层：整回合丢弃最老端，直到回合数达标
         turns = self._split_turns(self._messages)
         while len(turns) > self.max_turns:
             dropped_turns += 1
             dropped_chars += self._turn_chars(turns.pop(0))
         messages = self._flatten(turns)
+        # 第二层：字符数仍超标则继续整回合丢，但至少保留最近一个回合（保底当前对话）
         while self._total_chars(messages) > self.max_chars and len(turns) > 1:
             dropped_turns += 1
             dropped_chars += self._turn_chars(turns.pop(0))
             messages = self._flatten(turns)
+        # 第三层：只剩一个回合仍超长，才对最老消息逐条硬截断
         if self._total_chars(messages) > self.max_chars:
             lost, truncated = self._hard_truncate(messages)
             dropped_chars += lost
@@ -88,6 +96,7 @@ class ContextManager:
             if excess <= 0:
                 continue
             kept = message.content[:HARD_KEEP]
+            # 截断处打标记：模型能看到信息被裁掉了，而不是默默消失
             messages[index] = Message(message.role, f'{kept}…[已截断 {excess} 字]')
             dropped += excess
             truncated += 1
@@ -95,6 +104,7 @@ class ContextManager:
 
     @staticmethod
     def _is_turn_start(message: Message) -> bool:
+        """判断是否新回合起点：真实的 user 提问，而非 Observation/Error 观察。"""
         return message.role == 'user' and not (
             message.content.startswith(OBSERVATION_PREFIX)
             or message.content.startswith(ERROR_PREFIX)
@@ -109,6 +119,7 @@ class ContextManager:
             elif turns:
                 turns[-1].append(message)
             else:
+                # 历史以观察开头（异常残留）：单开一个回合兜底，不丢消息
                 turns.append([message])
         return turns
 

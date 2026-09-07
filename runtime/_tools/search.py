@@ -1,3 +1,5 @@
+"""search 工具：基于 Tavily 的联网搜索。"""
+
 import os
 from datetime import datetime
 from typing import Optional
@@ -11,6 +13,7 @@ from ..tools import Tool
 
 load_dotenv()
 
+# 与 agent.OBSERVATION_LIMIT 对齐：工具层先截断，避免观察被 agent 硬切丢信息
 _RESULT_LIMIT = 2000
 _TAVILY_MAX_RESULTS = 5
 
@@ -44,6 +47,7 @@ def _search(query: str, client: Optional[TavilyClient]) -> str:
         return f'未找到与「{query}」相关的结果'
     parts = [f'{item["title"]}\n{item["url"]}\n{item["content"]}' for item in results]
     text = '\n\n'.join(parts)
+    # 搜索结果常含低信息密度长文（README 表格等），超限截断保护上下文
     if len(text) > _RESULT_LIMIT:
         text = text[:_RESULT_LIMIT] + '…'
     return text

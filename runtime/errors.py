@@ -1,3 +1,5 @@
+"""异常体系：全部自定义异常的根类型与分层定义。"""
+
 class AgentRuntimeError(Exception):
     """所有自定义异常的根类型。"""
 

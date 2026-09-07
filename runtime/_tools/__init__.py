@@ -1,3 +1,5 @@
+"""内置工具包：calculator / search（Tavily）/ weather（QWeather）与默认注册表。"""
+
 from .calculator import make_calculator_tool
 from .search import make_search_tool
 from .weather import make_weather_tool

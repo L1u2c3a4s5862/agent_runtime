@@ -1,3 +1,5 @@
+"""ReAct 主循环：把用户输入、LLM 输出、工具调用编排成一个回合。"""
+
 from json import dumps
 from datetime import date, datetime
 from typing import Optional
@@ -19,7 +21,9 @@ from .trace import record_event
 
 setup_log_file('agent.log')
 
+# 单条工具观察的字符上限，防止一次搜索把上下文撑爆
 OBSERVATION_LIMIT = 2000
+# trace 事件里 payload 的字符上限，轨迹只留摘要、完整内容在日志
 TRACE_PAYLOAD_LIMIT = 500
 
 _SYSTEM_TEMPLATE = """\
@@ -76,17 +80,20 @@ class Agent:
         max_steps: int=8,
         parse_retries: int=2
     ):
+        # 步数必须为正，否则循环永不执行；重试次数不允许为负
         if max_steps <= 0:
             raise ValueError(f'max_steps 必须为正数: {max_steps}')
         if parse_retries < 0:
             raise ValueError(f'parse_retries 不能为负: {parse_retries}')
         self.llm = llm
+        # 未显式传工具时挂默认注册表（calculator + Tavily + QWeather）
         self.tools = tools if tools is not None else make_default_registry()
         self.max_steps = max_steps
         self.parse_retries = parse_retries
 
     @property
     def _llm_name(self) -> str:
+        """取 LLM 的展示名：OpenAIClient 用模型名，其余用类名。"""
         return getattr(self.llm, 'model', type(self.llm).__name__)
 
     def run(self, session: Session, user_input: str) -> str:
@@ -102,8 +109,10 @@ class Agent:
         """
         started = datetime.now()
         logger.debug(f'[session={session.id}] 用户输入: {user_input!r}')
+        # buffer 是本回合的暂存区：先积累消息，整回合成功才一次性提交进历史
         buffer = [Message('user', user_input)]
         steps = 0
+        # 连续解析失败计数：超过 parse_retries 上限即整体失败
         parse_failures = 0
         while steps < self.max_steps:
             steps += 1
@@ -133,17 +142,20 @@ class Agent:
             logger.debug(f'LLM 输出解析失败（第 {parse_failures + 1} 次）: {e}')
             if parse_failures >= self.parse_retries:
                 raise ParseError(f'连续 {parse_failures + 1} 次输出无法解析: {e}') from e
+            # 错误反馈以 user 角色喂回，模型看到"自己的错误"后按提示重试
             buffer.append(Message('user', f'{ERROR_PREFIX}{e}'))
             return None
 
     def _call_llm(self, session: Session, buffer: list[Message]) -> str:
         """拼请求（system + 裁剪历史 + 回合 buffer）并调用 LLM。"""
+        # system 每次重新生成：日期会变、工具清单可能被注册表改动
         prompt = build_system_prompt(self.tools.to_prompt_descriptors(), date.today().isoformat())
         messages = [Message('system', prompt)] + session.history.trim() + buffer
         started = datetime.now()
         try:
             text = self.llm.complete(messages)
         except LLMError as e:
+            # 失败也记轨迹：排查时能看到哪次调用挂了、花了多久
             record_event(
                 session, 'llm', self._llm_name, str(e),
                 started_at=started, ok=False, error=str(e)
@@ -165,6 +177,7 @@ class Agent:
         try:
             tool = self.tools.get(turn.action)
         except ToolNotFoundError as exc:
+            # 把可用工具名一并反馈，模型看到清单后能自我纠正
             available = ', '.join(item.name for item in self.tools.list())
             logger.debug(f'未知工具被调用: {turn.action}（可用: {available}）')
             buffer.append(Message('user', f'{ERROR_PREFIX}{exc}。可用工具: {available}'))
@@ -187,6 +200,7 @@ class Agent:
         try:
             result = tool.func(**args)
         except Exception as e:
+            # 工具异常不终止回合：转成 Error 观察喂回模型自主纠错，消耗 max_steps 预算
             record_event(
                 session, 'tool', tool.name, dumps(args, ensure_ascii=False),
                 started_at=started, ok=False, error=f'{type(e).__name__}: {e}'
@@ -199,6 +213,7 @@ class Agent:
             return
         payload = dumps(args, ensure_ascii=False) + ' -> ' + self._format_result(result)[:TRACE_PAYLOAD_LIMIT]
         record_event(session, 'tool', tool.name, payload, started_at=started)
+        # 观察伪装成 user 角色：多数 OpenAI 兼容端点不支持 tool role
         buffer.append(Message('user', f'{OBSERVATION_PREFIX}{self._format_result(result)}'))
         logger.info(
             f'[session={session.id}] 工具 {tool.name} 执行成功: '
@@ -215,6 +230,7 @@ class Agent:
             text = dumps(result, ensure_ascii=False)
         else:
             text = str(result)
+        # 超长观察截断：宁可丢尾部也不让单次观察霸占整个上下文窗口
         if len(text) > OBSERVATION_LIMIT:
             text = text[:OBSERVATION_LIMIT] + '…[观察已截断]'
         return text
@@ -222,5 +238,6 @@ class Agent:
     @staticmethod
     def _commit(session: Session, buffer: list[Message]):
         """整回合一次性提交进历史（回合原子性的唯一入口）。"""
+        # 只在这里 append：中途异常时 buffer 整体丢弃，历史保持回合前原状
         for message in buffer:
             session.history.append(message)
