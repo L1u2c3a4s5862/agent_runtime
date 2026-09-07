@@ -17,7 +17,7 @@ console = Console()
 logger.remove()
 setup_log_file('agent.log')
 
-def _chat_loop(agent: Agent, session: Session):
+def _agent_loop(agent: Agent, session: Session):
     """多轮对话主循环；每回合成功后落盘，异常不中断会话。"""
     while True:
         try:
@@ -50,7 +50,7 @@ def main():
     else:
         session = Session()
         console.print(f'[dim]新建会话 {session.id}（下次用 --session {session.id} 继续）[/]')
-    _chat_loop(Agent(OpenAIClient()), session)
+    _agent_loop(Agent(OpenAIClient()), session)
 
 if __name__ == '__main__':
     main()
