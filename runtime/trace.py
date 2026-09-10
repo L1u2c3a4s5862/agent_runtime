@@ -60,7 +60,7 @@ def record_event(
     session.traces.append(event)
     return event
 
-def render_trace(events: list[TraceEvent]) -> None:
+def render_trace(events: list[TraceEvent]):
     """用 rich 表格打印轨迹。"""
     table = Table(title='Trace 轨迹')
     table.add_column('序号', justify='right')

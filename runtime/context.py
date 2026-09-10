@@ -35,7 +35,7 @@ class ContextManager:
     其后到下一回合起点前的消息（含 assistant 原文与观察）都属于该回合。
     """
 
-    def __init__(self, max_turns: int = 6, max_chars: int = 8000) -> None:
+    def __init__(self, max_turns: int = 6, max_chars: int = 8000):
         # 上限必须为正，否则任何历史都会被立刻裁空
         if max_turns <= 0:
             raise ValueError(f'max_turns 必须为正数: {max_turns}')
@@ -57,7 +57,7 @@ class ContextManager:
         """最近一次 trim 的统计。"""
         return self._last_trim
 
-    def append(self, message: Message) -> None:
+    def append(self, message: Message):
         """追加一条消息。"""
         self._messages.append(message)
 

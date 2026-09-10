@@ -10,7 +10,7 @@ from runtime.errors import ToolError
 class FakeTavilyClient:
     """记录调用并返回预设响应的 Tavily 替身。"""
 
-    def __init__(self, response: dict[str, Any]) -> None:
+    def __init__(self, response: dict[str, Any]):
         self._response = response
         self.last_query = ''
         self.last_kwargs: dict[str, Any] = {}

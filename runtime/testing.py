@@ -10,7 +10,7 @@ from .llm import LLMClient
 class ScriptedLLM(LLMClient):
     """脚本化 Fake LLM：按预设顺序返回回复，耗尽抛 LLMError。"""
 
-    def __init__(self, responses: Optional[list[str]]=None) -> None:
+    def __init__(self, responses: Optional[list[str]]=None):
         self._responses: list[str] = list(responses) if responses else []
         self._calls: list[list[Message]] = []
 
@@ -22,7 +22,7 @@ class ScriptedLLM(LLMClient):
             raise LLMError('脚本回复已耗尽')
         return self._responses.pop(0)
 
-    def append(self, text: str) -> None:
+    def append(self, text: str):
         """追加一条预设回复。"""
         self._responses.append(text)
 

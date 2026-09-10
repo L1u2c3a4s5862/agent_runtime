@@ -65,10 +65,10 @@ def validate_arguments(schema: dict[str, Any], args: dict[str, Any]) -> dict[str
 class ToolRegistry:
     """工具注册表：注册、查找与 system prompt 渲染。"""
 
-    def __init__(self) -> None:
+    def __init__(self):
         self._tools: dict[str, Tool] = {}
 
-    def register(self, tool: Tool) -> None:
+    def register(self, tool: Tool):
         """注册工具，同名覆盖并记 warning。"""
         if tool.name in self._tools:
             logger.warning(f'工具 {tool.name} 已存在，将被覆盖')
@@ -80,7 +80,7 @@ class ToolRegistry:
             raise ToolNotFoundError(f'未知工具: {name}')
         return self._tools[name]
 
-    def unregister(self, name: str) -> None:
+    def unregister(self, name: str):
         """移除工具。"""
         if name not in self._tools:
             raise ToolNotFoundError(f'未知工具: {name}')

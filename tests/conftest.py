@@ -19,7 +19,7 @@ def make_llm() -> Callable[[list[str]], ScriptedLLM]:
     """构造脚本 LLM 的工厂。"""
     return ScriptedLLM
 
-def pytest_collection_finish(session: PytestSession) -> None:
+def pytest_collection_finish(session: PytestSession):
     """测试执行期间把 loguru 日志改写到 logs/test.log，与正式运行的 logs/agent.log 分离。"""
     # 时机关键：collection 完成意味着测试模块已 import（各模块顶层已注册 agent.log handler），
     # 此时 remove 换 handler，测试期间日志全部进 test.log，产品代码零改动

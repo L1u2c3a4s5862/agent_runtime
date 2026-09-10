@@ -58,7 +58,7 @@ class Session:
             session.history.append(Message(str(message['role']), str(message['content'])))
         return session
 
-def save_session(session: Session, directory: Path) -> None:
+def save_session(session: Session, directory: Path):
     """把会话写入 directory/<id>.json。"""
     # 目录由调用方指定（app 用 sessions/，测试用 tmp_path）
     directory.mkdir(exist_ok=True)
